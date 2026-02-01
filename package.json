@@ -1,0 +1,20 @@
+{
+    "name": "prevntiv",
+    "version": "1.0.0",
+    "description": "Prevntiv - Community-driven Preventive Health Platform",
+    "scripts": {
+        "client": "npm run dev --prefix client",
+        "server": "npm run dev --prefix server",
+        "install:all": "npm install --prefix client && npm install --prefix server",
+        "build": "npm run build --prefix client"
+    },
+    "keywords": [
+        "healthcare",
+        "preventive",
+        "health",
+        "monitoring",
+        "wellness"
+    ],
+    "author": "Prevntiv",
+    "license": "ISC"
+}
