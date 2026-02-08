@@ -3,29 +3,22 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
-import authRoutes from '../routes/auth.js';
-import healthRoutes from '../routes/health.js';
-
 // Load environment variables
 dotenv.config();
 
 const app = express();
 
-// CORS configuration
-const corsOptions = {
-    origin: function (origin, callback) {
-        callback(null, true); // Allow all origins for testing
-    },
+// CORS - Allow all origins
+app.use(cors({
+    origin: '*',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-app.use(cors(corsOptions));
 app.use(express.json());
-app.options('*', cors(corsOptions));
 
-// MongoDB connection with caching for serverless
+// MongoDB connection caching for serverless
 let cached = global.mongoose;
 
 if (!cached) {
@@ -38,74 +31,128 @@ async function connectDB() {
     }
 
     if (!cached.promise) {
+        if (!process.env.MONGODB_URI) {
+            throw new Error('MONGODB_URI is not defined in environment variables');
+        }
+
         const opts = {
             bufferCommands: false,
         };
 
-        if (process.env.MONGODB_URI) {
-            cached.promise = mongoose.connect(process.env.MONGODB_URI, opts).then((mongoose) => {
+        cached.promise = mongoose.connect(process.env.MONGODB_URI, opts)
+            .then((mongoose) => {
+                console.log('✅ MongoDB connected');
                 return mongoose;
+            })
+            .catch((error) => {
+                console.error('❌ MongoDB connection failed:', error);
+                throw error;
             });
-        }
     }
 
-    try {
-        cached.conn = await cached.promise;
-    } catch (e) {
-        cached.promise = null;
-        throw e;
-    }
-
+    cached.conn = await cached.promise;
     return cached.conn;
 }
 
-// Connect to DB before handling requests
-app.use(async (req, res, next) => {
-    try {
-        await connectDB();
-        next();
-    } catch (error) {
-        console.error('DB connection error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Database connection failed',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
-    }
-});
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/health', healthRoutes);
-
-// Health check routes
+// Debug/Health check route - NO DB required
 app.get('/', (req, res) => {
     res.json({
         status: 'ok',
         message: 'Prevntiv API is running',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        environment: {
+            nodeVersion: process.version,
+            hasMongoUri: !!process.env.MONGODB_URI,
+            hasJwtSecret: !!process.env.JWT_SECRET,
+            mongoUriPrefix: process.env.MONGODB_URI?.substring(0, 20) + '...'
+        }
     });
 });
 
 app.get('/api/health-check', (req, res) => {
     res.json({
         status: 'ok',
-        message: 'Prevntiv API is running',
-        timestamp: new Date().toISOString(),
-        env: {
-            hasMongoUri: !!process.env.MONGODB_URI,
-            hasJwtSecret: !!process.env.JWT_SECRET
-        }
+        message: 'API health check passed',
+        timestamp: new Date().toISOString()
     });
 });
 
-// Error handling middleware
+// Dynamic route imports with error handling
+let authRoutes, healthRoutes;
+
+try {
+    const authModule = await import('../routes/auth.js');
+    authRoutes = authModule.default;
+    console.log('✅ Auth routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load auth routes:', error);
+    app.use('/api/auth/*', (req, res) => {
+        res.status(500).json({
+            success: false,
+            message: 'Auth routes failed to load',
+            error: error.message
+        });
+    });
+}
+
+try {
+    const healthModule = await import('../routes/health.js');
+    healthRoutes = healthModule.default;
+    console.log('✅ Health routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load health routes:', error);
+    app.use('/api/health/*', (req, res) => {
+        res.status(500).json({
+            success: false,
+            message: 'Health routes failed to load',
+            error: error.message
+        });
+    });
+}
+
+// Database connection middleware for API routes only
+app.use('/api', async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error) {
+        console.error('Database connection error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Database connection failed',
+            error: error.message,
+            hint: 'Check if MONGODB_URI environment variable is set correctly in Vercel'
+        });
+    }
+});
+
+// Mount routes if they loaded successfully
+if (authRoutes) {
+    app.use('/api/auth', authRoutes);
+}
+
+if (healthRoutes) {
+    app.use('/api/health', healthRoutes);
+}
+
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: 'Route not found',
+        path: req.path,
+        method: req.method
+    });
+});
+
+// Global error handler
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    console.error('Global error handler:', err);
     res.status(500).json({
         success: false,
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        error: err.message,
+        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
 });
 

@@ -13,6 +13,7 @@ import Privacy from './pages/Privacy';
 import Terms from './pages/Terms';
 
 import './index.css';
+import './responsive-mobile.css';
 
 function App() {
   return (
